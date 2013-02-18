@@ -27,6 +27,8 @@ import org.globus.ftp.exception.FTPReplyParseException;
 import org.globus.ftp.exception.UnexpectedReplyCodeException;
 import org.globus.ftp.vanilla.Command;
 import org.globus.ftp.vanilla.Reply;
+import org.globus.ftp.vanilla.TransferState;
+import org.globus.ftp.vanilla.FTPControlChannel;
 import org.globus.ftp.extended.GridFTPServerFacade;
 import org.globus.ftp.extended.GridFTPControlChannel;
 import org.globus.gsi.gssapi.auth.Authorization;
@@ -213,30 +215,18 @@ public class GridFTPClient extends FTPClient {
 	}
     }
 
-    /**
-     * Sets transfer mode.
-     * @param mode should be {@link Session#MODE_STREAM MODE_STREAM}, 
-     *                       {@link Session#MODE_BLOCK MODE_BLOCK}, or 
-     *                       {@link GridFTPSession#MODE_EBLOCK MODE_EBLOCK}
-     **/
-    public void setMode(int mode) 
-        throws IOException, ServerException { 
-        String modeStr = null;
+    protected String getModeStr(int mode)
+    {
         switch (mode) {
         case Session.MODE_STREAM: 
-            modeStr = "S"; 
-            break;
+            return "S";
         case Session.MODE_BLOCK: 
-            modeStr = "B";
-            break;
+            return "B";
         case GridFTPSession.MODE_EBLOCK: 
-            modeStr = "E";
-            break;
+            return "E";
         default: 
             throw new IllegalArgumentException("Bad mode: " + mode); 
         }
-        
-        actualSetMode(mode, modeStr);
     }
 
     /**
@@ -1016,5 +1006,4 @@ public class GridFTPClient extends FTPClient {
             throw ServerException.embedFTPReplyParseException(rpe);
         }
     }
-    
 }

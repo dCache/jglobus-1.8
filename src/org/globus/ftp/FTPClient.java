@@ -25,7 +25,12 @@ import java.io.File;
 import java.util.Date;
 import java.util.StringTokenizer;
 import java.util.Vector;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.TimeZone;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
 import java.text.SimpleDateFormat;
 import java.text.ParseException;
 
@@ -75,6 +80,12 @@ public class  FTPClient {
      * Whether to use ALLO with put()/asyncPut() or not
      */
     protected boolean useAllo;
+
+    /**
+     * List of the checksum algorithms supported by the server as described in
+     * {@link http://www.ogf.org/documents/GFD.47.pdf [GridFTP v2 Protocol Description]}
+     */
+    protected List<String> algorithms;
 
     /* for subclasses */
     protected FTPClient() {
@@ -822,26 +833,25 @@ public class  FTPClient {
         this.session.transferType = type;
     }
 
-    /**
-     * Sets transfer mode.
-     * @param mode should be {@link Session#MODE_STREAM MODE_STREAM}, 
-     *                       {@link Session#MODE_BLOCK MODE_BLOCK}
-     **/
-    public void setMode(int mode) throws IOException, ServerException {
-        
-        String modeStr = null;
+    protected String getModeStr(int mode)
+    {
         switch (mode) {
         case Session.MODE_STREAM :
-            modeStr = "S";
-            break;
+            return "S";
         case Session.MODE_BLOCK :
-            modeStr = "B";
-            break;
+            return "B";
         default :
             throw new IllegalArgumentException("Bad mode: " + mode);
         }
+    }
         
-        actualSetMode(mode, modeStr);
+    /**
+     * Sets transfer mode.
+     * @param mode should be {@link Session#MODE_STREAM MODE_STREAM},
+     *                       {@link Session#MODE_BLOCK MODE_BLOCK}
+     **/
+    public void setMode(int mode) throws IOException, ServerException {
+        actualSetMode(mode, getModeStr(mode));
     }
 
     protected void actualSetMode(int mode, String modeStr)
@@ -1588,6 +1598,439 @@ public class  FTPClient {
         return (this.session.serverMode == Session.SERVER_PASSIVE);
     }
     
+
+    //////////////////////////////////////////////////////////////////////
+    // Implementation of GFD.47 compliant GETPUT support. The reason
+    // why this is implemented in FTPClient rather than GridFTPClient
+    // is, that GFD.47 support is detected via feature strings and is
+    // thus independent of GSI authentication.
+
+
+    /**
+     * Throws ServerException if GFD.47 GETPUT is not supported or
+     * cannot be used.
+     */
+    protected void checkGETPUTSupport()
+        throws ServerException, IOException
+    {
+        if (!isFeatureSupported(FeatureList.GETPUT)) {
+            throw new ServerException(ServerException.UNSUPPORTED_FEATURE);
+        }
+
+        if (controlChannel.isIPv6()) {
+            throw new ServerException(ServerException.UNSUPPORTED_FEATURE,
+                                      "Cannot use GridFTP2 with IP 6");
+        }
+    }
+
+    /**
+     * Regular expression for matching the port information of a
+     * GFD.47 127 reply.
+     */
+    public static final Pattern portPattern =
+        Pattern.compile("\\d+,\\d+,\\d+,\\d+,\\d+,\\d+");
+
+    /**
+     * Reads a GFD.47 compliant 127 reply and extracts the port
+     * information from it.
+     */
+    protected HostPort get127Reply()
+        throws ServerException, IOException, FTPReplyParseException
+    {
+        Reply reply = controlChannel.read();
+
+        if (Reply.isTransientNegativeCompletion(reply)
+            || Reply.isPermanentNegativeCompletion(reply)) {
+            throw new ServerException(ServerException.SERVER_REFUSED,
+                                      reply.getMessage());
+        }
+
+        if (reply.getCode() != 127) {
+            throw new ServerException(ServerException.WRONG_PROTOCOL,
+                                      reply.getMessage());
+        }
+
+        Matcher matcher = portPattern.matcher(reply.getMessage());
+        if (!matcher.find()) {
+            throw new ServerException(ServerException.WRONG_PROTOCOL,
+                                      "Cannot parse 127 reply: "
+                                      + reply.getMessage());
+        }
+
+        return new HostPort(matcher.group());
+    }
+
+    /**
+     * Writes a GFD.47 compliant GET or PUT command to the control
+     * channel.
+     *
+     * @param command Either "GET" or "PUT", depending on the command to issue
+     * @param passive True if the "pasv" parameter should be used
+     * @param port If passive is false, this is the port for
+     *             the "port" parameter
+     * @param mode The value for the "mode" parameter, or 0 if the
+     *             parameter should not be specified
+     * @param path The value for the "path" parameter
+     */
+    private void issueGETPUT(String command,
+                             boolean passive,
+                             HostPort port,
+                             int mode,
+                             String path)
+        throws IOException
+    {
+        Command cmd =
+            new Command(command,
+                        (passive
+                         ? "pasv"
+                         : ("port=" + port.toFtpCmdArgument())
+                         ) + ";" +
+                        "path=" + path + ";" +
+                        (mode > 0
+                         ? "mode=" + getModeStr(mode) + ";"
+                         : ""));
+        controlChannel.write(cmd);
+    }
+
+    /**
+     * Retrieves a file using the GFD.47 (a.k.a GridFTP2) GET command.
+     *
+     * Notice that as a side effect this method may change the local
+     * server facade passive/active mode setting. The caller should
+     * not rely on this setting after call to get2.
+     *
+     * Even though the active/passive status of the current session is
+     * ignored for the actual transfer, it still has to be in a
+     * consistent state prior to calling gridftp2Get.
+     *
+     * @param remoteFileName file to retrieve
+     * @param passive whether to configure the server to be passive
+     * @param sink data sink to store the file
+     * @param mListener marker listener
+     **/
+    public void get2(String remoteFileName,
+                     boolean passive,
+                     DataSink sink,
+                     MarkerListener mListener)
+        throws IOException,
+               ClientException,
+               ServerException
+    {
+        int serverMode = session.serverMode;
+        HostPort serverAddress = session.serverAddress;
+
+        try {
+            // Can we use GETPUT?
+            checkGETPUTSupport();
+
+            // Check sanity of arguments
+            if (session.transferMode == GridFTPSession.MODE_EBLOCK && passive) {
+                throw new IllegalArgumentException("Sender must be active in extended block mode");
+            }
+
+            // All parameters set correctly (or still unset)?
+            Session localSession = localServer.getSession();
+            session.matches(localSession);
+
+            // Connection setup depends a lot on whether we use
+            // passive or active mode. The passive party needs to be
+            // configured before the active party.
+            if (passive) {
+                issueGETPUT("GET", true, null, 0, remoteFileName);
+                session.serverMode = Session.SERVER_PASSIVE;
+                session.serverAddress = get127Reply();
+                setLocalActive();
+                localServer.store(sink);
+            } else {
+                HostPort hp = setLocalPassive();
+                localServer.store(sink);
+                issueGETPUT("GET", false, hp, 0, remoteFileName);
+                session.serverMode = Session.SERVER_ACTIVE;
+            }
+
+            transferRunSingleThread(localServer.getControlChannel(),
+                                    mListener);
+
+        } catch (FTPReplyParseException rpe) {
+            throw ServerException.embedFTPReplyParseException(rpe);
+        } finally {
+            session.serverMode = serverMode;
+            session.serverAddress = serverAddress;
+        }
+    }
+
+
+    /**
+     * Retrieves a file asynchronously using the GFD.47 (a.k.a
+     * GridFTP2) GET command.
+     *
+     * Notice that as a side effect this method may change the local
+     * server facade passive/active mode setting. The caller should
+     * not rely on this setting after call to gridftp2Get.
+     *
+     * Even though the active/passive status of the current session is
+     * ignored for the actual transfer, it still has to be in a
+     * consistent state prior to calling gridftp2Get.
+     *
+     * @param remoteFileName file to retrieve
+     * @param passive whether to configure the server to be passive
+     * @param sink data sink to store the file
+     * @param mListener marker listener
+     **/
+    public TransferState asynchGet2(String remoteFileName,
+                                    boolean passive,
+                                    DataSink sink,
+                                    MarkerListener mListener)
+        throws IOException,
+               ClientException,
+               ServerException
+    {
+        int serverMode = session.serverMode;
+        HostPort serverAddress = session.serverAddress;
+
+        try {
+
+            // Can we use GETPUT?
+            checkGETPUTSupport();
+
+            // Check sanity of arguments
+            if (session.transferMode == GridFTPSession.MODE_EBLOCK && passive) {
+                throw new IllegalArgumentException("Sender must be active in extended block mode");
+            }
+
+            // All parameters set correctly (or still unset)?
+            Session localSession = localServer.getSession();
+            session.matches(localSession);
+
+            // Connection setup depends a lot on whether we use
+            // passive or active mode. The passive party needs to be
+            // configured before the active party.
+            if (passive) {
+                issueGETPUT("GET", true, null, 0, remoteFileName);
+                session.serverMode = Session.SERVER_PASSIVE;
+                session.serverAddress = get127Reply();
+                setLocalActive();
+                localServer.store(sink);
+            } else {
+                HostPort hp = setLocalPassive();
+                localServer.store(sink);
+                issueGETPUT("GET", false, hp, 0, remoteFileName);
+                session.serverMode = Session.SERVER_ACTIVE;
+            }
+
+            return transferStart(localServer.getControlChannel(), mListener);
+
+        } catch (FTPReplyParseException rpe) {
+            throw ServerException.embedFTPReplyParseException(rpe);
+        } finally {
+            // This might not be the most elegant or correct
+            // solution. On the other hand, these parameters do not
+            // seem to be used after transferStart() and it is much
+            // easier to restore the old values now rather than when
+            // the transfer completes.
+            session.serverMode = serverMode;
+            session.serverAddress = serverAddress;
+        }
+    }
+
+    /**
+     * Stores a file at the remote server using the GFD.47 (a.k.a
+     * GridFTP2) PUT command.
+     *
+     * Notice that as a side effect this method may change the local
+     * server facade passive/active mode setting. The caller should
+     * not rely on this setting after call to gridftp2Get.
+     *
+     * Even though the active/passive status of the current session is
+     * ignored for the actual transfer, it still has to be in a
+     * consistent state prior to calling gridftp2Get.
+     *
+     * @param remoteFileName file to retrieve
+     * @param passive whether to configure the server to be passive
+     * @param source data will be read from here
+     * @param mListener marker listener
+     **/
+    public void put2(String remoteFileName,
+                     boolean passive,
+                     DataSource source,
+                     MarkerListener mListener)
+        throws IOException,
+               ClientException,
+               ServerException
+    {
+
+        int serverMode = session.serverMode;
+        HostPort serverAddress = session.serverAddress;
+
+        try {
+            // Can we use GETPUT?
+            checkGETPUTSupport();
+
+            // Check sanity of arguments
+            if (session.transferMode == GridFTPSession.MODE_EBLOCK && !passive) {
+                throw new IllegalArgumentException("Sender must be active in extended block mode");
+            }
+
+            // All parameters set correctly (or still unset)?
+            Session localSession = localServer.getSession();
+            session.matches(localSession);
+
+            // Connection setup depends a lot on whether we use
+            // passive or active mode. The passive party needs to be
+            // configured before the active party.
+            if (passive) {
+                issueGETPUT("PUT", true, null, 0, remoteFileName);
+                session.serverMode = Session.SERVER_PASSIVE;
+                session.serverAddress = get127Reply();
+                setLocalActive();
+                localServer.retrieve(source);
+            } else {
+                HostPort hp = setLocalPassive();
+                localServer.retrieve(source);
+                issueGETPUT("PUT", false, hp, 0, remoteFileName);
+                session.serverMode = Session.SERVER_ACTIVE;
+            }
+
+            transferRunSingleThread(localServer.getControlChannel(),
+                                    mListener);
+
+        } catch (FTPReplyParseException rpe) {
+            throw ServerException.embedFTPReplyParseException(rpe);
+        } finally {
+            session.serverMode = serverMode;
+            session.serverAddress = serverAddress;
+        }
+    }
+
+
+    /**
+     * Stores a file at the remote server using the GFD.47 (a.k.a
+     * GridFTP2) PUT command.
+     *
+     * Notice that as a side effect this method may change the local
+     * server facade passive/active mode setting. The caller should
+     * not rely on this setting after call to gridftp2Get.
+     *
+     * Even though the active/passive status of the current session is
+     * ignored for the actual transfer, it still has to be in a
+     * consistent state prior to calling gridftp2Get.
+     *
+     * @param remoteFileName file to retrieve
+     * @param passive whether to configure the server to be passive
+     * @param source data will be read from here
+     * @param mListener marker listener
+     **/
+    public TransferState asynchPut2(String remoteFileName,
+                                    boolean passive,
+                                    DataSource source,
+                                    MarkerListener mListener)
+        throws IOException,
+               ClientException,
+               ServerException
+    {
+        int serverMode = session.serverMode;
+        HostPort serverAddress = session.serverAddress;
+
+        try {
+
+            // Can we use GETPUT?
+            checkGETPUTSupport();
+
+            // Check sanity of arguments
+            if (session.transferMode == GridFTPSession.MODE_EBLOCK && !passive) {
+                throw new IllegalArgumentException("Sender must be active in extended block mode");
+            }
+
+            // All parameters set correctly (or still unset)?
+            Session localSession = localServer.getSession();
+            session.matches(localSession);
+
+            // Connection setup depends a lot on whether we use
+            // passive or active mode. The passive party needs to be
+            // configured before the active party.
+            if (passive) {
+                issueGETPUT("PUT", true, null, 0, remoteFileName);
+                session.serverMode = Session.SERVER_PASSIVE;
+                session.serverAddress = get127Reply();
+                setLocalActive();
+                localServer.retrieve(source);
+            } else {
+                HostPort hp = setLocalPassive();
+                localServer.retrieve(source);
+                issueGETPUT("PUT", false, hp, 0, remoteFileName);
+                session.serverMode = Session.SERVER_ACTIVE;
+            }
+
+            return transferStart(localServer.getControlChannel(), mListener);
+        } catch (FTPReplyParseException rpe) {
+            throw ServerException.embedFTPReplyParseException(rpe);
+        } finally {
+            // This might not be the most elegant or correct
+            // solution. On the other hand, these parameters do not
+            // seem to be used after transferStart() and it is much
+            // easier to restore the old values now rather than when
+            // the transfer completes.
+            session.serverMode = serverMode;
+            session.serverAddress = serverAddress;
+        }
+    }
+
+    /**
+     * Performs third-party transfer between two servers. If possibly,
+     * GFD.47 (a.k.a GridFTP2) GET and PUT commands are used.
+     *
+     * @param destination   client connected to source server
+     * @param remoteSrcFile source filename
+     * @param destination   client connected to destination server
+     * @param remoteDstFile destination filename
+     * @param mode data channel mode or 0 to use the current mode
+     * @param mListener     marker listener.
+     *                      Can be set to null.
+     */
+    static public void transfer(FTPClient source,
+                                String remoteSrcFile,
+                                FTPClient destination,
+                                String remoteDstFile,
+                                int mode,
+                                MarkerListener mListener)
+        throws IOException, ServerException, ClientException
+    {
+        try {
+            // Although neither mode nor passive setting from in the
+            // session is used, we still perform this check, since
+            // other things may be checked as well.
+            source.session.matches(destination.session);
+
+            HostPort hp;
+            if (destination.isFeatureSupported(FeatureList.GETPUT)) {
+                destination.issueGETPUT("PUT", true, null,
+                                        mode, remoteDstFile);
+                hp = ((GridFTPClient)destination).get127Reply();
+            } else {
+                if (mode > 0) {
+                    destination.setMode(mode);
+                }
+                hp = destination.setPassive();
+                destination.controlChannel.write(new Command("STOR", remoteDstFile));
+            }
+
+            if (source.isFeatureSupported(FeatureList.GETPUT)) {
+                source.issueGETPUT("GET", false, hp, mode, remoteSrcFile);
+            } else {
+                if (mode > 0) {
+                    source.setMode(mode);
+                }
+                source.setActive(hp);
+                source.controlChannel.write(new Command("RETR", remoteSrcFile));
+            }
+
+            source.transferRunSingleThread(destination.controlChannel, mListener);
+        } catch (FTPReplyParseException rpe) {
+            throw ServerException.embedFTPReplyParseException(rpe);
+        }
+    }
+
+
     public boolean isActiveMode() {
         return (this.session.serverMode == Session.SERVER_ACTIVE);
     }
@@ -1613,5 +2056,179 @@ public class  FTPClient {
     public boolean getUseAllo() {
         return this.useAllo;
     }
-    
+
+
+    /**
+     *  According to
+     * {@link http://www.ogf.org/documents/GFD.47.pdf [GridFTP v2 Protocol Description]}
+     * checksum feature has the following syntax:
+     * <pre>
+     * CKSUM <algorithm>[, …]
+     * </pre>
+     * getSupportedCksumAlgorithms parses checsum feauture parms and form a
+     * list of checksum algorithms supported by the server
+     * @return a list of checksum algorithms supported by the server in the order
+     * specified by the server
+     * @throws org.globus.ftp.exception.ClientException
+     * @throws org.globus.ftp.exception.ServerException
+     * @throws java.io.IOException
+     */
+    public List<String> getSupportedCksumAlgorithms()
+            throws ClientException, ServerException, IOException {
+
+        if(algorithms != null) {
+            return algorithms;
+        }
+
+        // check if the CKSUM algorithm is supported by the server
+        List<FeatureList.Feature> cksumFeature =
+                getFeatureList().getFeature(FeatureList.CKSUM);
+        if(cksumFeature == null) {
+            algorithms = Collections.emptyList();
+            return algorithms;
+        }
+
+        algorithms = new ArrayList();
+        for(FeatureList.Feature feature:cksumFeature) {
+            String[] parms = feature.getParms().split(",");
+            for (String parm: parms) {
+                algorithms.add(parm);
+            }
+        }
+        return algorithms;
+    }
+
+    public boolean isCksumAlgorithmSupported(String algorithm)
+            throws ClientException, ServerException, IOException {
+        return getSupportedCksumAlgorithms().contains(algorithm.toUpperCase());
+    }
+
+    private void checkCksumSupport(String algorithm)
+            throws ClientException, ServerException, IOException {
+
+        // check if the CKSUM is supported by the server
+        if (! isFeatureSupported(FeatureList.CKSUM) ) {
+            throw new ClientException(
+                                ClientException.OTHER,
+                                FeatureList.CKSUM+" is not supported by server");
+        }
+
+        // check if the CKSUM algorithm is supported by the server
+        if(! isCksumAlgorithmSupported(algorithm) ) {
+            throw new ClientException(
+                                ClientException.OTHER,
+                                FeatureList.CKSUM+" algorithm "+algorithm+
+                                " is not supported by server");
+        }
+
+    }
+
+    /**
+     * implement GridFTP v2 CKSM command from
+     * {@link http://www.ogf.org/documents/GFD.47.pdf [GridFTP v2 Protocol Description]}
+     * <pre>
+     * 5.1 CKSM
+     * This command is used by the client to request checksum calculation over a portion or
+     * whole file existing on the server. The syntax is:
+     * CKSM <algorithm> <offset> <length> <path> CRLF
+     * Server executes this command by calculating specified type of checksum over
+     * portion of the file starting at the offset and of the specified length. If length is –1,
+     * the checksum will be calculated through the end of the file. On success, the server
+     * replies with
+     * 2xx <checksum value>
+     * Actual format of checksum value depends on the algorithm used, but generally,
+     * hexadecimal representation should be used.
+     * </pre>
+     *
+     * @param algorithm ckeckum alorithm
+     * @param offset
+     * @param length
+     * @param path
+     * @return ckecksum value returned by the server
+     * @throws org.globus.ftp.exception.ClientException
+     * @throws org.globus.ftp.exception.ServerException
+     * @throws java.io.IOException
+     */
+    public String getChecksum(String algorithm,
+                              long offset,
+                              long length,
+                              String path)
+    throws ClientException, ServerException, IOException {
+
+        // check if we the cksum commands and specific algorithm are supported
+        checkCksumSupport(algorithm);
+
+        // form CKSM command
+        String parameters = String.format("%s %d %d %s",algorithm, offset,length,path);
+        Command cmd = new Command("CKSM", parameters);
+
+        // transfer command, obtain reply
+        Reply cksumReply = doCommand(cmd);
+
+        // check for error
+        if( !Reply.isPositiveCompletion(cksumReply) ) {
+            throw new ServerException(ServerException.SERVER_REFUSED,
+                    cksumReply.getMessage());
+        }
+
+        return cksumReply.getMessage();
+    }
+
+    /**
+     * GridFTP v2 CKSM command for the whole file
+     * @param  algorithm ckeckum alorithm
+     * @param  path
+     * @return ckecksum value returned by the server
+     * @throws org.globus.ftp.exception.ClientException
+     * @throws org.globus.ftp.exception.ServerException
+     * @throws java.io.IOException
+     */
+    public String getChecksum(String algorithm,
+                              String path)
+    throws ClientException, ServerException, IOException {
+        return getChecksum(algorithm,0,-1,path);
+    }
+
+    /**
+     * implement GridFTP v2 SCKS command as described in
+     * {@link http://www.ogf.org/documents/GFD.47.pdf [GridFTP v2 Protocol Description]}
+     * <pre>
+     * 5.2 SCKS
+     * This command is sent prior to upload command such as STOR, ESTO, PUT. It is used
+     * to convey to the server that the checksum value for the file which is about to be
+     * uploaded. At the end of transfer, server will calculate checksum for the received file,
+     * and if it does not match, will consider the transfer to have failed. Syntax of the
+     * command is:
+     * SCKS <algorithm> <value> CRLF
+     * Actual format of checksum value depends on the algorithm used, but generally,
+     * hexadecimal representation should be used.
+     * </pre>
+     * @param algorithm
+     * @param value
+     * @throws org.globus.ftp.exception.ClientException
+     * @throws org.globus.ftp.exception.ServerException
+     * @throws java.io.IOException
+     */
+    public void setChecksum(String algorithm, String value)
+    throws ClientException, ServerException, IOException {
+
+        // check if we the cksum commands and specific algorithm are supported
+        checkCksumSupport(algorithm);
+
+        // form CKSM command
+        String parameters = String.format("%s %s",algorithm, value);
+        Command cmd = new Command("SCKS", parameters);
+
+        // transfer command, obtain reply
+        Reply cksumReply = doCommand(cmd);
+
+        // check for error
+        if( !Reply.isPositiveCompletion(cksumReply) ) {
+            throw new ServerException(ServerException.SERVER_REFUSED,
+                    cksumReply.getMessage());
+        }
+
+        return;
+    }
+
 } //FTPClient

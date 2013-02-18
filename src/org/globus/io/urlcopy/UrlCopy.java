@@ -76,6 +76,7 @@ public class UrlCopy implements Runnable {
     protected GlobusURL dstUrl         = null;
     protected boolean canceled         = false;
     protected boolean thirdParty       = true;
+    protected boolean gridftp2         = true;
     protected List listeners           = null;
     
     protected long sourceOffset      = 0;
@@ -414,6 +415,26 @@ public class UrlCopy implements Runnable {
     
 
     /**
+     * Enables/disables usage of GridFTP2 (as specified in GFD.47) if
+     * supported by the server.
+     *
+     * @param gridftp2 if true enable, false disable
+     */
+    public void setGridFTP2(boolean gridftp2) {
+        this.gridftp2 = gridftp2;
+    }
+
+    /**
+     * Returns whether GridFTP2 (as specified in GFD.47) is to be used
+     * when supported by the server.
+     *
+     * @return true if enabled, false if disabled
+     */
+    public boolean getGridFTP2() {
+        return gridftp2;
+    }
+
+    /**
      * Cancels the transfer in progress. If no transfer
      * is in progress it is ignored.
      */
@@ -560,7 +581,8 @@ public class UrlCopy implements Runnable {
                                         srcUrl.getHost(),
                                         srcUrl.getPort(),
                                         fromFile,
-                                        getDCAU());
+                                        getDCAU(),
+                                        getGridFTP2());
             
         } else if (fromP.equalsIgnoreCase("https")) {
             Authorization auth = getSourceAuthorization();
@@ -619,6 +641,7 @@ public class UrlCopy implements Runnable {
                                           toFile,
                                           appendMode,
                                           getDCAU(),
+                                          getGridFTP2(),
                                           (disableAllo ? -1 : size));
         } else if (toP.equalsIgnoreCase("https")) {
             Authorization auth = getDestinationAuthorization();
@@ -733,6 +756,12 @@ public class UrlCopy implements Runnable {
                 this.destinationOffset == 0 && 
                 this.sourceLength == Long.MAX_VALUE) {
                 
+                if (gridftp2) {
+                    FTPClient.transfer(srcFTP, srcUrl.getPath(),
+                                       dstFTP, dstUrl.getPath(),
+                                       GridFTPSession.MODE_STREAM,
+                                       null);
+                } else {
                 srcFTP.setMode(Session.MODE_STREAM);
                 dstFTP.setMode(Session.MODE_STREAM);
                    
@@ -741,6 +770,7 @@ public class UrlCopy implements Runnable {
                                 dstUrl.getPath(), 
                                 false, 
                                 null);
+                }
             } else if (srcFTP instanceof GridFTPClient && 
                        dstFTP instanceof GridFTPClient) {
                 

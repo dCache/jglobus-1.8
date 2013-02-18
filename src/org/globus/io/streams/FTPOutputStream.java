@@ -21,6 +21,7 @@ import java.io.IOException;
 import org.globus.ftp.FTPClient;
 import org.globus.ftp.Session;
 import org.globus.ftp.OutputStreamDataSource;
+import org.globus.ftp.FeatureList;
 import org.globus.ftp.vanilla.TransferState;
 import org.globus.ftp.exception.FTPException;
 import org.globus.common.ChainedIOException;
@@ -30,6 +31,7 @@ public class FTPOutputStream extends GlobusOutputStream {
     protected OutputStream output;
     protected FTPClient ftp;
     protected TransferState state;
+    protected boolean useGFD47;
 
     protected FTPOutputStream() {
     }
@@ -54,8 +56,23 @@ public class FTPOutputStream extends GlobusOutputStream {
 			   boolean passive,
 			   int type) 
 	throws IOException, FTPException {
+        this(host, port, user, pwd, file, append, passive, type, true);
+    }
+
+    public FTPOutputStream(String host,
+                         int port,
+                         String user,
+                         String pwd,
+                         String file,
+                         boolean append,
+                         boolean passive,
+                         int type,
+                           boolean useGFD47)
+      throws IOException, FTPException {
 	this.ftp = new FTPClient(host, port);
 	this.ftp.authorize(user, pwd);
+        this.useGFD47 =
+            (useGFD47 && this.ftp.isFeatureSupported(FeatureList.GETPUT));
 	put(passive, type, file, append);
     }
 
@@ -107,6 +124,15 @@ public class FTPOutputStream extends GlobusOutputStream {
 	try {
 	    this.ftp.setType(type);
 
+          source = new OutputStreamDataSource(2048);
+
+            if (useGFD47) {
+                this.state =
+                    this.ftp.asynchPut2(remoteFile,
+                                        passive,
+                                        source,
+                                        null);
+            } else {
 	    if (passive) {
 		this.ftp.setPassive();
 		this.ftp.setLocalActive();
@@ -114,13 +140,11 @@ public class FTPOutputStream extends GlobusOutputStream {
 		this.ftp.setLocalPassive();
 		this.ftp.setActive();
 	    }
-	    
-	    source = new OutputStreamDataSource(2048);
-	    
 	    this.state = this.ftp.asynchPut(remoteFile,
 					    source,
 					    null,
 					    append);
+            }
 	    
 	    this.state.waitForStart();
 

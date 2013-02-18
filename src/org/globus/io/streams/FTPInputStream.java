@@ -21,6 +21,7 @@ import java.io.IOException;
 import org.globus.ftp.FTPClient;
 import org.globus.ftp.Session;
 import org.globus.ftp.InputStreamDataSink;
+import org.globus.ftp.FeatureList;
 import org.globus.ftp.vanilla.TransferState;
 import org.globus.ftp.exception.FTPException;
 import org.globus.common.ChainedIOException;
@@ -30,6 +31,7 @@ public class FTPInputStream extends GlobusInputStream {
     protected InputStream input;
     protected FTPClient ftp;
     protected TransferState state;
+    protected boolean useGFD47;
 
     protected FTPInputStream() {
     }
@@ -52,8 +54,22 @@ public class FTPInputStream extends GlobusInputStream {
 			  boolean passive,
 			  int type) 
 	throws IOException, FTPException {
+        this(host, port, user, pwd, file, passive, type, true);
+    }
+
+    public FTPInputStream(String host,
+                        int port,
+                        String user,
+                        String pwd,
+                        String file,
+                        boolean passive,
+                        int type,
+                          boolean useGFD47)
+      throws IOException, FTPException {
 	this.ftp = new FTPClient(host, port);
 	this.ftp.authorize(user, pwd);
+        this.useGFD47 =
+            (useGFD47 && this.ftp.isFeatureSupported(FeatureList.GETPUT));
 	get(passive, type, file);
     }
     
@@ -67,6 +83,16 @@ public class FTPInputStream extends GlobusInputStream {
 	try {
 	    this.ftp.setType(type);
 
+          sink = new InputStreamDataSink();
+          this.input = sink.getInputStream();
+
+            if (useGFD47) {
+                this.state =
+                    this.ftp.asynchGet2(remoteFile,
+                                        passive,
+                                        sink,
+                                        null);
+            } else {
 	    if (passive) {
 		this.ftp.setPassive();
 		this.ftp.setLocalActive();
@@ -75,13 +101,10 @@ public class FTPInputStream extends GlobusInputStream {
 		this.ftp.setActive();
 	    }
 	    
-	    sink = new InputStreamDataSink();
-
-	    this.input = sink.getInputStream();
-
 	    this.state = this.ftp.asynchGet(remoteFile,
 					    sink,
 					    null);
+            }
 	
 	    this.state.waitForStart();
 

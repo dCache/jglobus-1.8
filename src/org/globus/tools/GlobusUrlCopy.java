@@ -41,6 +41,8 @@ public class GlobusUrlCopy {
         "\t-nodcau | -no-data-channel-authentication\n" +
         "\t      Turn off data channel authentication for ftp transfers\n" +
         "\t      Applies to FTP protocols only.\n" + 
+        "\t-nogridftp2 | -no-gridftp2\n" +
+        "\t      Turn use of GridFTP2 off (on by default)\n" +
         "\t-tcp-bs <size> | -tcp-buffer-size <size>\n" +
         "\t      Specifies the size (in bytes) of the TCP buffer to be\n" +
         "\t      used by the underlying FTP data channels.\n" +
@@ -63,6 +65,7 @@ public class GlobusUrlCopy {
 
         boolean thirdPartyTransfer = true;
         boolean dcau = true;
+        boolean gridftp2 = true;
         boolean disableAllo = false;
         int tcpBufferSize = 0;
         
@@ -76,6 +79,9 @@ public class GlobusUrlCopy {
             } else if (args[i].equalsIgnoreCase("-nodcau") ||
                        args[i].equalsIgnoreCase("-no-data-channel-authentication")) {
                 dcau = false;
+            } else if (args[i].equalsIgnoreCase("-nogridftp2") ||
+                       args[i].equalsIgnoreCase("-no-gridftp2")) {
+                gridftp2 = false;
             } else if (args[i].equalsIgnoreCase("-debug")) {
                 debug = true;
             } else if (args[i].equalsIgnoreCase("-ss")) {
@@ -170,6 +176,7 @@ public class GlobusUrlCopy {
             uc.setDestinationUrl(to);
             uc.setUseThirdPartyCopy(thirdPartyTransfer);
             uc.setDCAU(dcau);
+            uc.setGridFTP2(gridftp2);
             uc.setSourceAuthorization(srcAuth);
             uc.setDestinationAuthorization(dstAuth);
             uc.setDisableAllo(disableAllo);

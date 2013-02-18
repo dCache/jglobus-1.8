@@ -20,6 +20,7 @@ import java.io.IOException;
 import org.globus.ftp.GridFTPClient;
 import org.globus.ftp.Session;
 import org.globus.ftp.DataChannelAuthentication;
+import org.globus.ftp.FeatureList;
 import org.globus.ftp.exception.FTPException;
 import org.globus.gsi.gssapi.auth.Authorization;
 import org.globus.gsi.gssapi.auth.HostAuthorization;
@@ -62,8 +63,22 @@ public class GridFTPOutputStream extends FTPOutputStream {
                    long size)
     throws IOException, FTPException {
     this(cred, auth, 
+         host, port, file, append, reqDCAU, true, size);
+    }
+
+    public GridFTPOutputStream(GSSCredential cred,
+                   Authorization auth,
+                   String host,
+                   int port,
+                   String file,
+                   boolean append,
+                   boolean reqDCAU,
+                   boolean gridftp2,
+                   long size)
+    throws IOException, FTPException {
+    this(cred, auth,
          host, port, file, append,
-         true, Session.TYPE_IMAGE, reqDCAU, size);
+         true, Session.TYPE_IMAGE, reqDCAU, gridftp2, size);
     }
     
     public GridFTPOutputStream(GSSCredential cred, 
@@ -78,7 +93,7 @@ public class GridFTPOutputStream extends FTPOutputStream {
     throws IOException, FTPException {
         this(cred, auth, 
              host, port, file, append, 
-             passive, type, reqDCAU, -1);
+             passive, type, reqDCAU, true, -1);
     }
 
     public GridFTPOutputStream(GSSCredential cred, 
@@ -90,12 +105,16 @@ public class GridFTPOutputStream extends FTPOutputStream {
 			       boolean passive,
 			       int type,
 			       boolean reqDCAU,
+                               boolean useGFD47,
 			       long size)
 	throws IOException, FTPException {
 	GridFTPClient gridFtp = new GridFTPClient(host, port);
 	gridFtp.setAuthorization(auth);
 	gridFtp.authenticate(cred);
 	
+        this.useGFD47 =
+            (useGFD47 && gridFtp.isFeatureSupported(FeatureList.GETPUT));
+
 	if (gridFtp.isFeatureSupported("DCAU")) {
 	    if (!reqDCAU) {
 		gridFtp.setDataChannelAuthentication(DataChannelAuthentication.NONE);

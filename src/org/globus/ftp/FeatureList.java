@@ -15,7 +15,8 @@
  */
 package org.globus.ftp;
 
-import java.util.Vector;
+import java.util.List;
+import java.util.ArrayList;
 import java.util.StringTokenizer;
 
 /**
@@ -32,6 +33,62 @@ import java.util.StringTokenizer;
 
 public class FeatureList {
 
+    /**
+     * RFC 2389 specified the following syntax for FEAT responce
+     * <pre>
+     * feat-response   = error-response / no-features / feature-listing
+     *  no-features     = "211" SP *TCHAR CRLF
+     *  feature-listing = "211-" *TCHAR CRLF
+     *                    1*( SP feature CRLF )
+     *                    "211 End" CRLF
+     *  feature         = feature-label [ SP feature-parms ]
+     *  feature-label   = 1*VCHAR
+     *  feature-parms   = 1*TCHAR
+     * </pre>
+     *  Feature class represence each individual feature and contain two fields
+     *  required label and optional parms
+     *
+     */
+    public static final class Feature {
+
+        private final String label;
+
+        private final String parms;
+
+        private Feature (String label) {
+
+        this.label = label;
+        this.parms = null;
+
+        }
+
+        private Feature (String label, String parms) {
+
+        this.label = label;
+        this.parms = parms;
+
+        }
+
+        /**
+         * @return the name
+         */
+        public String getLabel() {
+
+        return label;
+
+        }
+
+        /**
+         * @return the qualifiers, null if no qualifiers
+         */
+        public String getParms() {
+
+        return parms;
+
+        }
+    }
+
+    // well known labels
     public static final String SIZE = "SIZE";
     public static final String MDTM = "MDTM";
     public static final String PARALLEL = "PARALLEL";
@@ -41,15 +98,16 @@ public class FeatureList {
     public static final String ABUF = "ABUF";
     public static final String DCAU = "DCAU";
     public static final String PIPE = "PIPE";
+    public static final String MODEX = "MODEX";
+    public static final String GETPUT = "GETPUT";
+    public static final String CKSUM =  "CKSUM";
 
-    protected Vector featVector;
+    protected final List<Feature> features = new ArrayList();
 
     public FeatureList(String featReplyMsg) {
 
-	featVector = new Vector();
-
 	StringTokenizer responseTokenizer
-	    = new StringTokenizer(featReplyMsg, 
+	    = new StringTokenizer(featReplyMsg,
 				  System.getProperty("line.separator"));
 
 	// ignore the first part of the message
@@ -58,18 +116,64 @@ public class FeatureList {
 	}
 
 	while ( responseTokenizer.hasMoreElements() ) {
+
 	    String line = (String) responseTokenizer.nextElement();
 	    line = line.trim().toUpperCase();
-	    if ( !line.startsWith( "211 END" ) ) {
-		featVector.add( line );
-	    }
+	    if ( line.startsWith( "211 END" ) ) {
+            break;
+        }
+        String[] splitFeature = line.split(" ");
+
+        if( splitFeature.length ==2) {
+            features.add(new Feature(splitFeature[0], splitFeature[1]));
+        } else {
+            features.add(new Feature(line));
+        }
+
 	}
     }
 
-    public boolean contains(String feature) {
-	if (feature == null) {
-	    throw new IllegalArgumentException();
+    public boolean contains(String label) {
+
+	if (label == null) {
+	    throw new IllegalArgumentException("feature label is null");
 	}
-	return featVector.contains(feature.toUpperCase());
-    }    
+
+    label = label.toUpperCase();
+
+    for( Feature feature:features ) {
+        if(feature.getLabel().equals(label)) {
+            return true;
+        }
+    }
+
+    return false;
+
+    }
+
+    /**
+     * Get all features that have label equal to the argument
+     * Note that  RFC 2389 does not require a feature with a
+     * given label to appear only once
+     * @param label
+     * @return List of found features with given label in the same order
+     * as they were given to us by the server
+     */
+    public List<Feature> getFeature(String label) {
+
+	if (label == null) {
+	    throw new IllegalArgumentException("feature label is null");
+	}
+
+    label = label.toUpperCase();
+    List<Feature> foundFeatures = new ArrayList();
+    for( Feature feature:features ) {
+        if(feature.getLabel().equals(label)) {
+            foundFeatures.add(feature);
+        }
+    }
+
+    return foundFeatures;
+
+    }
 }

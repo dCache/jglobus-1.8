@@ -20,6 +20,7 @@ import java.io.IOException;
 import org.globus.ftp.GridFTPClient;
 import org.globus.ftp.Session;
 import org.globus.ftp.DataChannelAuthentication;
+import org.globus.ftp.FeatureList;
 import org.globus.ftp.exception.FTPException;
 import org.globus.gsi.gssapi.auth.Authorization;
 import org.globus.gsi.gssapi.auth.HostAuthorization;
@@ -28,6 +29,7 @@ import org.ietf.jgss.GSSCredential;
 
 public class GridFTPInputStream extends FTPInputStream {
 
+
     public GridFTPInputStream(GSSCredential cred,
 			      String host, 
 			      int port, 
@@ -35,7 +37,7 @@ public class GridFTPInputStream extends FTPInputStream {
 	throws IOException, FTPException {
 	this(cred, HostAuthorization.getInstance(),
 	     host, port, 
-	     file, true, Session.TYPE_IMAGE, true);
+           file, true, Session.TYPE_IMAGE, true, true);
     }
 
     public GridFTPInputStream(GSSCredential cred,
@@ -46,7 +48,19 @@ public class GridFTPInputStream extends FTPInputStream {
 			      boolean reqDCAU) 
 	throws IOException, FTPException {
 	this(cred, auth, host, port, 
-	     file, true, Session.TYPE_IMAGE, reqDCAU);
+           file, true, Session.TYPE_IMAGE, reqDCAU, true);
+    }
+
+    public GridFTPInputStream(GSSCredential cred,
+                            Authorization auth,
+                            String host,
+                            int port,
+                            String file,
+                            boolean reqDCAU,
+                              boolean useGFD47)
+      throws IOException, FTPException {
+      this(cred, auth, host, port,
+           file, true, Session.TYPE_IMAGE, reqDCAU, useGFD47);
     }
 
     public GridFTPInputStream(GSSCredential cred,
@@ -56,12 +70,16 @@ public class GridFTPInputStream extends FTPInputStream {
 			      String file,
 			      boolean passive,
 			      int type,
-			      boolean reqDCAU) 
+                            boolean reqDCAU,
+                              boolean useGFD47)
 	throws IOException, FTPException {
 	GridFTPClient gridFtp = new GridFTPClient(host, port);
 	gridFtp.setAuthorization(auth);
 	gridFtp.authenticate(cred);
 	
+        this.useGFD47 =
+            (useGFD47 && gridFtp.isFeatureSupported(FeatureList.GETPUT));
+
 	if (gridFtp.isFeatureSupported("DCAU")) {
 	    if (!reqDCAU) {
 		gridFtp.setDataChannelAuthentication(DataChannelAuthentication.NONE);
@@ -74,5 +92,4 @@ public class GridFTPInputStream extends FTPInputStream {
 	
 	get(passive, type, file);
     }
-
 }
