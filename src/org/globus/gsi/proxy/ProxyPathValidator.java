@@ -887,12 +887,21 @@ public class ProxyPathValidator {
 	//check date validity of CRL
         boolean validCRL = checkCRLValidity(crl);
         if (validCRL) {
-	    if (crl.isRevoked(cert)) {
-		throw new 
-                    ProxyPathValidatorException(ProxyPathValidatorException
-                                                .REVOKED, cert,
-                                                i18n.getMessage("proxyErr21",
-                                                                cert.getSubjectDN().getName()));
+            /* One would have thought that a CRL is immutable and thus
+             * thread safe, however inside the ASN1 parse tree we find
+             * LazyDERSequence. LazyDERSequence is parsed lazily and
+             * does so in a non-thread safe manner. One may very well
+             * classify this as a bouncy castle bug, but as a
+             * workaround synchronizing on the CRL solves the problem.
+             */
+            synchronized (crl) {
+                if (crl.isRevoked(cert)) {
+                    throw new
+                        ProxyPathValidatorException(ProxyPathValidatorException
+                                                    .REVOKED, cert,
+                                                    i18n.getMessage("proxyErr21",
+                                                                    cert.getSubjectDN().getName()));
+                }
             }
 	} else {
             throw new 
