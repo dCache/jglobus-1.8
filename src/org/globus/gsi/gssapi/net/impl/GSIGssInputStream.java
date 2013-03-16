@@ -32,6 +32,7 @@ public class GSIGssInputStream extends GssInputStream {
 
     protected byte [] header;
     protected int mode;
+    boolean enc = false;
 
     public GSIGssInputStream(InputStream in, GSSContext context) {
         super(in, context);
@@ -81,6 +82,29 @@ public class GSIGssInputStream extends GssInputStream {
             if (SSLUtil.read(this.in, buf, this.header.length, len) < 0) {
                 return null;
             }
+
+            switch ((int) header[0]) {
+                case 22:
+                    if (!enc && (int) buf[this.header.length] == 11) {
+                        // this is the certificate request during a handshake
+                        int flen = SSLUtil.toInt(buf, this.header.length) & 0x00FFFFFF;
+                        int alreadyRead = len;
+                        int bytesToRead = flen - alreadyRead + 4;
+                        byte[] certs = new byte[buf.length + bytesToRead];
+                        System.arraycopy(buf, 0, certs, 0, buf.length);
+                        if (SSLUtil.read(this.in, certs, buf.length, bytesToRead) < 0) {
+                            return null;
+                        }
+                        buf = certs;
+                    }
+                    break;
+                case 20:
+                    enc = true;
+                    break;
+                default:
+                    //nop
+            }
+
         } else if (SSLUtil.isSSLv2HelloPacket(this.header)) {
             this.mode = GssSocket.SSL_MODE;
             // SSLv2 - assume 2-byte header 
