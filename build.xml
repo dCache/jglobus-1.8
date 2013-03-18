@@ -11,11 +11,11 @@
   <property name="cog.javadoc.dir"    value="${cog.doc.dir}/api"/>
 
   <property name="cog.jar.filename"        
-            value="cog-jglobus-${version}.jar"/>
+            value="cog-jglobus-${version}${dist}.jar"/>
   <property name="cog.jobmanager.jar.name"   
-            value="cog-jobmanager-${version}.jar"/>
+            value="cog-jobmanager-${version}${dist}.jar"/>
   <property name="cog.url.jar.name"   
-            value="cog-url-${version}.jar"/>
+            value="cog-url-${version}${dist}.jar"/>
 
   <property name="cog.jar.file"        
             value="${build.dir}/${cog.jar.filename}"/>
