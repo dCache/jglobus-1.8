@@ -76,7 +76,7 @@ public class GSIGssInputStream extends GssInputStream {
             if (SSLUtil.read(this.in, this.header, 4, 1) < 0) {
                 return null;
             }
-            int len = SSLUtil.toShort(this.header[3], this.header[4]);
+            int len = SSLUtil.toUnsignedShort(this.header[3], this.header[4]);
             buf = new byte[this.header.length + len];
             System.arraycopy(this.header, 0, buf, 0, this.header.length);
             if (SSLUtil.read(this.in, buf, this.header.length, len) < 0) {

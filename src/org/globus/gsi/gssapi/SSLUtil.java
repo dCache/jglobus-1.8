@@ -137,6 +137,18 @@ public class SSLUtil {
     }
 
     /**
+     * Converts 2 bytes to a
+     * <code>unsigned short</code>.
+     *
+     * @param a byte 1
+     * @param b byte 2
+     * @return the <code>unsigned short</code> value of the 2 bytes
+     */
+    public static int toUnsignedShort(byte a, byte b) {
+        return (int) ((a & 0xff) << 8 |  (b & 0xff));
+    }
+
+    /**
      * Converts 4 bytes to an <code>int</code> at 
      * the specified offset in the given byte array.
      *
