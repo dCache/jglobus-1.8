@@ -119,7 +119,9 @@
 		classpathref="classpath"
         	debug="${debug}" 
 		optimize="${optimize}"
-		deprecation="${deprecation}">
+		deprecation="${deprecation}"
+                source="${javac.source}"
+                target="${javac.target}">
 
         <exclude name="**/org/globus/mds/gsi/jndi/*Wrapper*" 
                  unless="sasl.present"/>
