@@ -66,7 +66,7 @@ public class GSIGssInputStream extends GssInputStream {
 
     protected byte[] readToken()
         throws IOException {
-        byte[] buf = null;
+        byte[] buf;
         if (SSLUtil.read(this.in, this.header, 0, this.header.length-1) < 0) {
             return null;
         }
@@ -88,14 +88,13 @@ public class GSIGssInputStream extends GssInputStream {
                     if (!enc && (int) buf[this.header.length] == 11) {
                         // this is the certificate request during a handshake
                         int flen = SSLUtil.toInt(buf, this.header.length) & 0x00FFFFFF;
-                        int alreadyRead = len;
-                        int bytesToRead = flen - alreadyRead + 4;
-                        byte[] certs = new byte[buf.length + bytesToRead];
-                        System.arraycopy(buf, 0, certs, 0, buf.length);
-                        if (SSLUtil.read(this.in, certs, buf.length, bytesToRead) < 0) {
+                        int alreadyRead = len - 4;
+                        if (flen > alreadyRead) {
+                            /*
+                             * jumbo frame. Reject it!
+                             */
                             return null;
                         }
-                        buf = certs;
                     }
                     break;
                 case 20:
